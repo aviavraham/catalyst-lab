@@ -382,6 +382,332 @@ kubectl exec -n catalystlab-shared pgvector-cluster-1 -- \
 - **MLflow API:** `http://mlflow.<CLUSTER_IP>.nip.io/api/2.0/mlflow/`
 - **OTel Collector (internal):** `http://otel-collector.catalystlab-shared.svc.cluster.local:4317`
 
+## Trace Data Reference
+
+This section documents what trace data is captured from vLLM (KServe) and other services, what attributes are available, and how to query the data directly.
+
+### Current Trace Coverage
+
+**Total spans in MLflow:** 169,030+ spans across all services (as of March 2026)
+
+**vLLM-related spans:** 5,786 spans (3.4% of total)
+- **CHAT_MODEL spans:** 3,829 (high-level LLM inference operations)
+- **HTTP POST spans:** 1,395 (low-level HTTP request tracking)
+
+### What's Being Captured from vLLM
+
+#### 1. CHAT_MODEL Spans (GenAI Semantic Conventions)
+
+Client-side instrumentation from llamastack captures comprehensive LLM operation metadata:
+
+**Request attributes:**
+```json
+{
+  "gen_ai.operation.name": "chat",
+  "gen_ai.system": "openai",
+  "gen_ai.request.model": "RedHatAI/Qwen3-Next-80B-A3B-Instruct-FP8",
+  "gen_ai.request.temperature": "0.0",
+  "gen_ai.request.max_tokens": "256",
+  "gen_ai.request.seed": "1234",
+  "gen_ai.request.stop_sequences": ["Q:", "</s>", "<|im_end|>"],
+  "server.address": "qwen3-next-80b-kserve-workload-svc.kserve-lab.svc.cluster.local",
+  "server.port": "8000"
+}
+```
+
+**Response attributes:**
+```json
+{
+  "gen_ai.response.model": "RedHatAI/Qwen3-Next-80B-A3B-Instruct-FP8",
+  "gen_ai.response.finish_reasons": ["stop"],
+  "gen_ai.response.id": "chatcmpl-78179c79-bc3e-4770-8711-61008dcd1542",
+  "gen_ai.usage.input_tokens": "63",
+  "gen_ai.usage.output_tokens": "153",
+  "mlflow.chat.tokenUsage": {
+    "input_tokens": 63,
+    "output_tokens": 153,
+    "total_tokens": 216
+  }
+}
+```
+
+**Service relationship:**
+```json
+{
+  "peer.service": "vllm"
+}
+```
+
+**Performance metrics:**
+- Span duration: 1.35s - 2.6s (end-to-end inference time)
+- Token usage: 57-94 input tokens, 153-256 output tokens per request
+
+#### 2. HTTP POST Spans
+
+Low-level HTTP request tracking via httpx instrumentation:
+
+```json
+{
+  "http.method": "POST",
+  "http.url": "http://qwen3-next-80b-kserve-workload-svc.kserve-lab.svc.cluster.local:8000/v1/chat/completions",
+  "http.status_code": "200",
+  "peer.service": "vllm"
+}
+```
+
+**Performance:**
+- HTTP overhead: 13ms - 369ms (network + protocol, not inference time)
+
+
+### Complete Span Examples
+
+These are actual span objects from the MLflow database showing the full structure stored in the `content` column.
+
+#### Example 1: CHAT_MODEL Span (GenAI Inference)
+
+```json
+{
+  "trace_id": "uSDDdUfXlTq84vG5Kyj1dA==",
+  "span_id": "As1A+i6CJK4=",
+  "parent_span_id": "PYrGYPZAoK0=",
+  "name": "chat RedHatAI/Qwen3-Next-80B-A3B-Instruct-FP8",
+  "start_time_unix_nano": 1772710823888277097,
+  "end_time_unix_nano": 1772710825241951171,
+  "events": [],
+  "status": {
+    "code": "STATUS_CODE_UNSET",
+    "message": ""
+  },
+  "attributes": {
+    "mlflow.traceRequestId": "tr-b920c37547d7953abce2f1b92b28f574",
+    "gen_ai.operation.name": "chat",
+    "gen_ai.system": "openai",
+    "gen_ai.request.model": "RedHatAI/Qwen3-Next-80B-A3B-Instruct-FP8",
+    "gen_ai.request.temperature": "0.0",
+    "gen_ai.request.max_tokens": "256",
+    "gen_ai.request.seed": "1234",
+    "gen_ai.request.stop_sequences": "[\"Q:\", \"</s>\", \"<|im_end|>\"]",
+    "server.address": "qwen3-next-80b-kserve-workload-svc.kserve-lab.svc.cluster.local",
+    "server.port": "8000",
+    "gen_ai.response.model": "RedHatAI/Qwen3-Next-80B-A3B-Instruct-FP8",
+    "gen_ai.response.finish_reasons": "[\"stop\"]",
+    "gen_ai.response.id": "chatcmpl-78179c79-bc3e-4770-8711-61008dcd1542",
+    "gen_ai.usage.input_tokens": "63",
+    "gen_ai.usage.output_tokens": "153",
+    "mlflow.spanType": "CHAT_MODEL",
+    "peer.service": "vllm",
+    "mlflow.chat.tokenUsage": "{\"input_tokens\": 63, \"output_tokens\": 153, \"total_tokens\": 216}"
+  }
+}
+```
+
+**Duration:** 1.35 seconds (1,353,674,074 nanoseconds)
+
+**Key fields:**
+- `trace_id`: Links all spans in the same trace
+- `span_id`: Unique identifier for this span
+- `parent_span_id`: References parent span (creates hierarchy)
+- `start_time_unix_nano` / `end_time_unix_nano`: Nanosecond precision timestamps
+- `events`: Array of span events (empty in this case)
+- `status.code`: STATUS_CODE_UNSET, OK, or ERROR
+- `attributes`: All span metadata (GenAI conventions, token usage, server info)
+
+#### Example 2: HTTP POST Span (Network Layer)
+
+```json
+{
+  "trace_id": "Hzh8+oAz6G3Y5A1fZdfKlQ==",
+  "span_id": "PVbHKKyWIAA=",
+  "parent_span_id": "RQHhxZuVJyA=",
+  "name": "POST",
+  "start_time_unix_nano": 1772383022343216414,
+  "end_time_unix_nano": 1772383022529114808,
+  "events": [],
+  "status": {
+    "code": "STATUS_CODE_UNSET",
+    "message": ""
+  },
+  "attributes": {
+    "mlflow.traceRequestId": "tr-1f387cfa8033e86dd8e40d5f65d7ca95",
+    "http.method": "POST",
+    "http.url": "http://qwen3-next-80b-kserve-workload-svc.kserve-lab.svc.cluster.local:8000/v1/chat/completions",
+    "http.status_code": "200",
+    "peer.service": "vllm"
+  }
+}
+```
+
+**Duration:** 185.9 milliseconds (185,898,394 nanoseconds)
+
+**Key fields:**
+- `name`: HTTP method (POST, GET, etc.)
+- `attributes.http.method`: HTTP verb
+- `attributes.http.url`: Full request URL
+- `attributes.http.status_code`: HTTP response code
+- `attributes.peer.service`: Downstream service name (enables service graph)
+
+#### Span Hierarchy Example
+
+In a typical trace, spans form a parent-child hierarchy:
+
+```
+Trace: tr-b920c37547d7953abce2f1b92b28f574
+├─ Span: llamastack request handler (parent)
+│  ├─ Span: chat RedHatAI/Qwen3-Next-80B-A3B-Instruct-FP8 (CHAT_MODEL)
+│  │  └─ Span: POST (HTTP request to vLLM)
+│  └─ Span: response processing
+```
+
+The `parent_span_id` field creates this hierarchy, allowing MLflow and Jaeger to display waterfall views.
+
+### What's NOT Being Captured
+
+❌ **Server-side metrics from vLLM:**
+- No Istio sidecar in vLLM pod (KServe/Knative incompatibility)
+- No OpenTelemetry instrumentation in vLLM service itself
+- Only client-side perspective available
+
+❌ **Infrastructure metrics:**
+- GPU utilization (use Prometheus/Kubernetes metrics instead)
+- Model loading time
+- VRAM usage
+- Batch processing details
+
+❌ **Request/response content:**
+- Actual prompt text (not captured for privacy/security)
+- Generated response text
+- Only metadata and token counts available
+
+❌ **vLLM internals:**
+- Queue wait time
+- Attention mechanism performance
+- KV cache statistics
+
+### Data Flow
+
+```
+LLaMA Stack (OpenTelemetry SDK auto-instrumentation)
+  ↓ Captures outbound HTTP calls
+  ↓ Tags with peer.service="vllm"
+  ↓
+OTel Collector :4317/:4318
+  ↓ Transform processor (adds/modifies attributes)
+  ↓ Batch processor
+  ↓ Fan-out to exporters
+  ↓
+MLflow /v1/traces
+  ↓
+PostgreSQL spans table
+  ↓ Schema: trace_id, span_id, name, type, content (JSON)
+```
+
+### Querying Trace Data Directly
+
+For advanced analysis beyond the MLflow UI, query PostgreSQL directly:
+
+#### Connect to database:
+
+```bash
+kubectl exec -n catalystlab-shared pgvector-cluster-1 -- \
+  psql -U postgres -d mlflow
+```
+
+#### Count spans by type:
+
+```sql
+SELECT COUNT(*) as count, type
+FROM spans
+WHERE content LIKE '%vllm%'
+GROUP BY type
+ORDER BY count DESC;
+```
+
+#### Get recent vLLM spans with latency:
+
+```sql
+SELECT
+  to_timestamp(start_time_unix_nano/1000000000.0) as span_time,
+  name,
+  duration_ns/1000000 as duration_ms
+FROM spans
+WHERE content LIKE '%vllm%'
+ORDER BY start_time_unix_nano DESC
+LIMIT 10;
+```
+
+#### Extract specific attributes from span JSON:
+
+```sql
+SELECT
+  name,
+  content::json->'attributes'->'gen_ai.usage.input_tokens' as input_tokens,
+  content::json->'attributes'->'gen_ai.usage.output_tokens' as output_tokens,
+  content::json->'attributes'->'peer.service' as peer_service
+FROM spans
+WHERE content LIKE '%vllm%'
+  AND type = 'CHAT_MODEL'
+LIMIT 5;
+```
+
+#### Find spans by peer.service tag:
+
+```sql
+SELECT COUNT(*) as vllm_spans
+FROM spans
+WHERE content::json->'attributes'->>'peer.service' = 'vllm';
+```
+
+### Spans Table Schema
+
+```sql
+\d spans
+```
+
+| Column | Type | Description |
+|--------|------|-------------|
+| trace_id | varchar(50) | Unique trace identifier |
+| experiment_id | integer | MLflow experiment ID (foreign key) |
+| span_id | varchar(50) | Unique span identifier |
+| parent_span_id | varchar(50) | Parent span ID (for nested spans) |
+| name | text | Span name (e.g., "POST", "chat RedHat...") |
+| type | varchar(500) | Span type (e.g., "CHAT_MODEL", null for HTTP) |
+| status | varchar(50) | Status code (UNSET, OK, ERROR) |
+| start_time_unix_nano | bigint | Start timestamp in nanoseconds |
+| end_time_unix_nano | bigint | End timestamp in nanoseconds |
+| duration_ns | bigint | Calculated duration (end - start) |
+| content | text | JSON object with all span attributes |
+
+**Primary key:** (trace_id, span_id)
+
+**Indexes:**
+- `index_spans_experiment_id`
+- `index_spans_experiment_id_duration`
+- `index_spans_experiment_id_status_type`
+
+### Service Graph Visibility
+
+The `peer.service: "vllm"` tag enables:
+
+✅ **Kiali service topology:** Shows llamastack → vllm connection with live traffic metrics
+
+✅ **Jaeger dependencies view:** Shows service relationships (static graph)
+
+✅ **Service filtering:** Query traces by downstream service
+
+For animated service topology visualization, see [Kiali documentation](../kiali/README.md).
+
+### Performance Baselines
+
+Based on observed trace data:
+
+| Metric | Observed Range | Notes |
+|--------|----------------|-------|
+| End-to-end latency | 1.35s - 2.6s | Full request/response cycle |
+| HTTP overhead | 13ms - 369ms | Network + protocol only |
+| Input tokens | 57 - 94 tokens | Typical user prompts |
+| Output tokens | 153 - 256 tokens | Model responses |
+| Finish reasons | "stop", "length" | Natural stop vs max_tokens hit |
+
 ## Troubleshooting
 
 ### Pod Not Starting
