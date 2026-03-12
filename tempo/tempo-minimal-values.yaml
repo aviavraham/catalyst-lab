@@ -1,0 +1,119 @@
+# Tempo Minimal Configuration for Lab Environment
+# Single pod mode - similar to Jaeger all-in-one
+# Replaces Jaeger with minimal resource footprint
+
+# Use local storage
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+
+# Minimal distributor
+distributor:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+  config:
+    ring:
+      replication_factor: 1
+
+# Minimal ingester with persistence
+ingester:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+  config:
+    replication_factor: 1
+
+# Minimal query frontend
+queryFrontend:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# Minimal querier
+querier:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Minimal compactor with persistence
+compactor:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 5Gi
+
+# Disable metrics generator to save resources
+metricsGenerator:
+  enabled: false
+
+# Minimal gateway
+gateway:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+# Disable memcached to reduce pod count
+memcached:
+  enabled: false
+
+# ServiceMonitor for Prometheus
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus-stack
+
+# Trace ingestion
+traces:
+  otlp:
+    grpc:
+      enabled: true
+    http:
+      enabled: true
+
+# Multi-tenancy disabled
+multitenancyEnabled: false
+
+# Reduce resource requests globally
+global:
+  clusterDomain: cluster.local

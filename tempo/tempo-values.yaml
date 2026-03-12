@@ -1,0 +1,85 @@
+# Tempo Helm values for distributed tracing
+# Replaces Jaeger in the observability stack
+# Integrates with MLflow, Kiali, and Prometheus
+
+# Use distributed mode for scalability
+tempo:
+  # Storage backend - use local filesystem for lab environment
+  # For production, use S3, GCS, or Azure Blob
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  # Query frontend for Grafana/Kiali integration
+  queryFrontend:
+    query:
+      enabled: true
+
+  # Trace ingestion limits
+  ingester:
+    trace_idle_period: 10s
+    max_block_bytes: 1048576
+    max_block_duration: 5m
+
+  # Compactor for managing trace blocks
+  compactor:
+    compaction:
+      block_retention: 168h  # 7 days
+
+  # Distributor settings
+  distributor:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:14250
+          thrift_http:
+            endpoint: 0.0.0.0:14268
+      zipkin:
+        endpoint: 0.0.0.0:9411
+
+# Persistence for traces
+persistence:
+  enabled: true
+  storageClassName: local-path
+  accessModes:
+    - ReadWriteOnce
+  size: 50Gi
+
+# Service configuration
+service:
+  type: ClusterIP
+
+# Resource allocation (lab environment)
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: 2
+    memory: 4Gi
+
+# ServiceMonitor for Prometheus scraping
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus-stack
+
+# Multi-tenancy disabled for lab
+multitenancyEnabled: false
+
+# Gateway for query access
+gateway:
+  enabled: true
+  ingress:
+    enabled: false  # We'll use NGINX ingress separately
