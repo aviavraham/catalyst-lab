@@ -1,0 +1,114 @@
+# Tempo Distributed Helm values for distributed tracing
+# Replaces Jaeger in the observability stack
+# Integrates with MLflow, Kiali, and Prometheus
+
+# Global configuration
+global:
+  clusterDomain: cluster.local
+
+# Use local storage for lab environment (S3/GCS/Azure for production)
+storage:
+  trace:
+    backend: local
+    local:
+      path: /var/tempo/traces
+
+# Distributor - receives traces from OTel Collector
+distributor:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Ingester - writes traces to storage
+ingester:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1
+      memory: 1Gi
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 20Gi
+
+# Query Frontend - handles queries from Grafana/Kiali
+queryFrontend:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  service:
+    type: ClusterIP
+
+# Querier - executes queries
+querier:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Compactor - manages trace blocks and retention
+compactor:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+
+# Metrics Generator - creates metrics from traces (optional)
+metricsGenerator:
+  enabled: false
+
+# Gateway - single entry point for queries
+gateway:
+  enabled: true
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ServiceMonitor for Prometheus
+serviceMonitor:
+  enabled: true
+  labels:
+    release: prometheus-stack
+
+# Trace retention
+traces:
+  otlp:
+    grpc:
+      enabled: true
+      endpoint: 0.0.0.0:4317
+    http:
+      enabled: true
+      endpoint: 0.0.0.0:4318
+
+# Multi-tenancy disabled for lab
+multitenancyEnabled: false

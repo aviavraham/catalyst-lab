@@ -1,0 +1,128 @@
+# Kiali ConfigMap patch to use Tempo instead of Jaeger
+# Apply with: kubectl patch configmap kiali -n istio-system --patch-file kiali-tempo-patch.yaml
+data:
+  config.yaml: |
+    additional_display_details:
+    - annotation: kiali.io/api-spec
+      icon_annotation: kiali.io/api-type
+      title: API Documentation
+    auth:
+      openid: {}
+      openshift:
+        client_id_prefix: kiali
+      strategy: anonymous
+    clustering:
+      autodetect_secrets:
+        enabled: true
+        label: kiali.io/multiCluster=true
+      clusters: []
+    deployment:
+      additional_service_yaml: {}
+      affinity:
+        node: {}
+        pod: {}
+        pod_anti: {}
+      cluster_wide_access: true
+      configmap_annotations: {}
+      custom_envs: []
+      custom_secrets: []
+      dns:
+        config: {}
+        policy: ""
+      extra_labels: {}
+      host_aliases: []
+      hpa:
+        api_version: autoscaling/v2
+        spec: {}
+      image_digest: ""
+      image_name: quay.io/kiali/kiali
+      image_pull_policy: IfNotPresent
+      image_pull_secrets: []
+      image_version: v2.17
+      ingress:
+        additional_labels: {}
+        class_name: nginx
+        override_yaml:
+          metadata: {}
+      ingress_enabled: false
+      instance_name: kiali
+      logger:
+        log_format: text
+        log_level: info
+        sampler_rate: "1"
+        time_field_format: 2006-01-02T15:04:05Z07:00
+      namespace: istio-system
+      network_policy:
+        enabled: false
+      node_selector: {}
+      pod_annotations:
+        proxy.istio.io/config: '{ "holdApplicationUntilProxyStarts": true }'
+      pod_labels:
+        sidecar.istio.io/inject: "false"
+      priority_class_name: ""
+      probes:
+        liveness:
+          initial_delay_seconds: 5
+          period_seconds: 30
+        readiness:
+          initial_delay_seconds: 5
+          period_seconds: 30
+        startup:
+          failure_threshold: 6
+          initial_delay_seconds: 30
+          period_seconds: 10
+      remote_cluster_resources_only: false
+      replicas: 1
+      resources:
+        limits:
+          memory: 1Gi
+        requests:
+          cpu: 10m
+          memory: 64Mi
+      secret_name: kiali
+      security_context: {}
+      service_annotations: {}
+      service_type: ""
+      tolerations: []
+      topology_spread_constraints: []
+      version_label: v2.17.0
+      view_only_mode: false
+    external_services:
+      custom_dashboards:
+        enabled: true
+      istio:
+        root_namespace: istio-system
+      prometheus:
+        url: "http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090"
+        cache_enabled: true
+        cache_duration: 10
+      tracing:
+        enabled: true
+        provider: tempo
+        in_cluster_url: "http://tempo-query-frontend.catalystlab-shared.svc.cluster.local:3200"
+        external_url: "http://tempo.<CLUSTER_IP>.nip.io"
+        use_grpc: false
+        namespace_selector: true
+        query_timeout: 30
+        tempo_config:
+          org_id: ""
+          datasource_uid: ""
+    identity:
+      cert_file: ""
+      private_key_file: ""
+    kiali_feature_flags:
+      custom_workload_types: []
+      disabled_features: []
+      validations:
+        ignore:
+        - KIA1301
+    login_token:
+      signing_key: CHANGEME00000000
+    server:
+      observability:
+        metrics:
+          enabled: true
+          port: 9090
+      port: 20001
+      web_root: /kiali
+    skipResources: []
