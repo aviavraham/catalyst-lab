@@ -1,0 +1,44 @@
+# Project Golem - Container Image
+# Multi-stage build for optimized image size
+
+FROM python:3.11-slim AS builder
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+# Runtime stage
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python packages from builder
+COPY --from=builder /root/.local /root/.local
+
+# Copy application code
+COPY ingest.py GolemServer.py ./
+COPY app/ ./app/
+
+# Ensure Python packages are in PATH
+ENV PATH=/root/.local/bin:$PATH
+
+# Expose server port
+EXPOSE 8000
+
+# Default command runs the server
+# For ingest, override with: podman run ... python ingest.py
+CMD ["python", "GolemServer.py"]

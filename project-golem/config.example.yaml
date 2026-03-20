@@ -1,0 +1,57 @@
+# Project Golem Configuration
+# Copy this file to config.yaml and fill in your values
+
+# Database connection (pgvector)
+database:
+  # For local development with port-forward:
+  host: localhost
+  port: 5432
+
+  # For cluster deployment:
+  # host: pgvector-cluster-rw.catalystlab-shared.svc
+  # port: 5432
+
+  database: vectordb
+  user: vectordb
+  password: <PLACEHOLDER>  # Get from: kubectl get secret pgvector-cluster-app -n catalystlab-shared -o jsonpath='{.data.password}' | base64 -d
+
+# Embedding model endpoint (Qwen3-Embedding-8B)
+embedding:
+  # Option 1: Local port-forward
+  url: http://localhost:8000/v1/embeddings
+
+  # Option 2: External cluster endpoint
+  # url: http://<CLUSTER_IP>/kserve-lab/qwen3-embedding-8b/v1/embeddings
+
+  # Option 3: Internal cluster DNS (for in-cluster deployment)
+  # url: http://qwen3-embedding-8b-kserve-workload-svc.kserve-lab.svc.cluster.local:8000/v1/embeddings
+
+  model: Qwen/Qwen3-Embedding-8B
+  dimensions: 4096
+
+# UMAP dimensionality reduction parameters
+umap:
+  # Number of neighbors to consider
+  # Higher values preserve more global structure
+  # Recommended: 30 for 4096d embeddings (vs 15 for lower dims)
+  n_neighbors: 30
+
+  # Minimum distance between points in low-dimensional space
+  # Lower values = tighter clusters
+  # Range: 0.0 (tight) to 1.0 (spread out)
+  min_dist: 0.1
+
+  # Distance metric for high-dimensional space
+  # Options: cosine, euclidean, manhattan
+  metric: cosine
+
+# KNN graph for visual connections
+knn:
+  # Number of nearest neighbors to connect
+  # Higher = denser graph
+  k: 5
+
+# Visualization server settings
+server:
+  host: 0.0.0.0  # Listen on all interfaces
+  port: 8000     # Server port
