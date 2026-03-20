@@ -1,0 +1,84 @@
+---
+# Project Golem - Ingest Job
+# Runs ingest.py to generate golem_cortex.json from pgvector data
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: golem-ingest-config
+  namespace: catalystlab-shared
+data:
+  config.yaml: |
+    database:
+      host: pgvector-cluster-rw.catalystlab-shared.svc
+      port: 5432
+      database: vectordb
+      user: vectordb
+      # password loaded from DB_PASSWORD env var
+
+    embedding:
+      url: http://qwen3-embedding-8b-kserve-workload-svc.kserve-lab.svc.cluster.local:8000/v1/embeddings
+      model: Qwen/Qwen3-Embedding-8B
+      dimensions: 4096
+
+    umap:
+      n_neighbors: 30
+      min_dist: 0.1
+      metric: cosine
+
+    knn:
+      k: 5
+
+    server:
+      host: 0.0.0.0
+      port: 8000
+
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: golem-ingest
+  namespace: catalystlab-shared
+  labels:
+    app: project-golem
+    component: ingest
+spec:
+  ttlSecondsAfterFinished: 600  # Clean up 10 minutes after completion
+  template:
+    metadata:
+      labels:
+        app: project-golem
+        component: ingest
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: ingest
+        image: quay.io/aicatalyst/project-golem:latest
+        imagePullPolicy: Always
+        command: ["python", "ingest.py"]
+        env:
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: golem-db-secret
+              key: password
+        volumeMounts:
+        - name: config
+          mountPath: /app/config.yaml
+          subPath: config.yaml
+        - name: cortex-output
+          mountPath: /data
+        resources:
+          requests:
+            cpu: 1
+            memory: 2Gi
+          limits:
+            cpu: 4
+            memory: 8Gi
+      volumes:
+      - name: config
+        configMap:
+          name: golem-ingest-config
+      - name: cortex-output
+        persistentVolumeClaim:
+          claimName: golem-cortex-pvc

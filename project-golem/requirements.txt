@@ -1,0 +1,23 @@
+# Project Golem - Python Dependencies
+
+# Web Framework
+Flask==3.0.0
+flask-cors==4.0.0
+
+# Database
+psycopg2-binary==2.9.9
+pgvector==0.2.4
+
+# Machine Learning & Dimensionality Reduction
+numpy==1.26.3
+umap-learn==0.5.5
+scikit-learn==1.4.0
+
+# HTTP Requests
+requests==2.31.0
+
+# Configuration
+PyYAML==6.0.1
+
+# Optional: For better performance
+# numba==0.59.0  # Accelerates UMAP
