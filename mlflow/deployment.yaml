@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: mlflow
-          image: ghcr.io/mlflow/mlflow:latest-full
+          image: ghcr.io/mlflow/mlflow:v3.10.1-full
           command:
             - mlflow
             - server
