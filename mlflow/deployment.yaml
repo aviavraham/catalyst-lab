@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: mlflow
-          image: ghcr.io/mlflow/mlflow:latest-full
+          image: ghcr.io/mlflow/mlflow:v3.10.1-full
           command:
             - mlflow
             - server
@@ -25,7 +25,7 @@ spec:
             - --port=5000
             - --backend-store-uri=postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@pgvector-cluster-rw:5432/mlflow
             - --artifacts-destination=/mlflow/artifacts
-            - --allowed-hosts=mlflow.<CLUSTER_IP>.nip.io,mlflow.catalystlab-shared.svc.cluster.local,mlflow.catalystlab-shared.svc.cluster.local:5000,localhost,localhost:5000
+            - --allowed-hosts=*  # Allow all hosts (lab environment only)
           ports:
             - containerPort: 5000
           env:

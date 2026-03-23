@@ -1,21 +1,64 @@
 // Project Golem - Three.js Visualization
 // Neural memory cortex visualization with WebGL
 
-let scene, camera, renderer, controls;
+let scene, camera, renderer, controls, composer;
 let nodes = [];
 let edges = [];
 let nodeObjects = [];
 let edgeObjects = [];
-let highlightedNodes = new Set();
-let cortexData = null;
 
-// Category colors
+// Camera dynamics (mimicking reference GIF)
+let cameraTarget = new THREE.Vector3(0, 0, 0);
+let clusterRadius = 5;
+const lookSensitivity = 0.05;
+const noiseScale = 0.3;
+const baseFOV = 75;
+let orbitAngle = 0;  // Current orbital position (radians)
+const orbitSpeed = 0.03;  // Very slow counterclockwise orbit (radians per second, ~1.7°/sec)
+let orbitDistance = 10;  // Distance from centroid (dynamic based on cluster size)
+const orbitElevation = 0.4;  // Elevation angle (slightly above, in radians ~23 degrees)
+let highlightedNodes = new Set();
+let highlightedEdges = new Set();
+let cortexData = null;
+let traceSequence = [];  // Ordered sequence for trace propagation
+let traceStartTime = 0;  // When the trace animation started
+let cameraAnimating = false;
+let cameraAnimationStart = 0;
+let cameraHoldUntil = 0;  // Hold camera at zoomed position until this time
+let cameraStartPos, cameraTargetPos, cameraStartTarget, cameraEndTarget;  // Initialized on first use
+let autoRotateEnabled = true;  // Auto-rotate the cortex
+let isLocalOrbit = false;  // Whether we're orbiting around query results
+let localOrbitCenter = new THREE.Vector3(0, 0, 0);  // Center point for local orbit
+let localOrbitDistance = 10;  // Distance for local orbit
+let zoomOutStartTime = 0;  // When to start zooming out
+let zoomOutDuration = 2.0;  // Duration of zoom-out transition in seconds
+let userInteracting = false;  // Whether user is manually controlling the camera
+let lastInteractionTime = 0;  // Last time user interacted
+const interactionTimeout = 5.0;  // Resume auto-orbit after 5 seconds of inactivity
+
+// Category colors - Wikipedia categories
 const categoryColors = {
-    'default': 0x00ff00,
-    'documentation': 0x0088ff,
-    'code': 0xff8800,
-    'notes': 0xff00ff,
-    'research': 0x00ffff
+    'AI & Machine Learning': 0x00ffff,        // Bright cyan
+    'Robotics & Automation': 0x4169e1,        // Royal blue
+    'Quantum & Physics': 0x8b00ff,            // Violet
+    'Neuroscience & Cognition': 0xff1493,     // Hot pink
+    'Space & Astronomy': 0x1e3a8a,            // Midnight blue
+    'Cryptography & Security': 0xff0000,      // Red
+    'Renaissance & Art': 0xffd700,            // Gold
+    'Biology & Genetics': 0x00ff00,           // Lime green
+    'Computer Science': 0x0088ff,             // Electric blue
+    'Mathematics': 0xff6600,                  // Orange
+    'Philosophy & Logic': 0x9933ff,           // Purple
+    'History': 0xd2691e,                      // Chocolate
+    'Economics & Finance': 0x50c878,          // Emerald
+    'Chemistry': 0x00ced1,                    // Aqua
+    'Climate & Environment': 0x228b22,        // Forest green
+    'Medicine & Healthcare': 0xdc143c,        // Crimson
+    'Linguistics & Language': 0xffa500,       // Bright orange
+    'Music & Acoustics': 0xff00ff,            // Magenta
+    'Materials Science': 0x708090,            // Slate gray
+    'Psychology & Behavior': 0xffc0cb,        // Pink
+    'default': 0xffffff                       // White (fallback)
 };
 
 // Animation state
@@ -27,7 +70,7 @@ function init() {
     // Create scene
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x000000);
-    scene.fog = new THREE.Fog(0x000000, 10, 50);
+    scene.fog = new THREE.FogExp2(0x000000, 0.015);  // Exponential fog for more atmospheric depth
 
     // Create camera
     const container = document.getElementById('canvas-container');
@@ -46,23 +89,40 @@ function init() {
     renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(renderer.domElement);
 
+    // Setup post-processing for bloom effect
+    composer = new THREE.EffectComposer(renderer);
+    const renderPass = new THREE.RenderPass(scene, camera);
+    composer.addPass(renderPass);
+
+    const bloomPass = new THREE.UnrealBloomPass(
+        new THREE.Vector2(container.clientWidth, container.clientHeight),
+        0.9,  // strength - low so only bright highlighted nodes bloom intensely
+        6.0,  // radius - extremely large to completely obscure sphere geometry
+        0.4   // threshold - higher so only bright nodes bloom, keeping background dark
+    );
+    composer.addPass(bloomPass);
+
     // Add orbit controls
     controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.minDistance = 2;
     controls.maxDistance = 30;
+    controls.autoRotate = false;  // Using custom dynamic orbital camera instead
 
-    // Add lights
-    const ambientLight = new THREE.AmbientLight(0x404040, 1);
+    // Add lights - soft ambient for nebula effect
+    const ambientLight = new THREE.AmbientLight(0x202020, 0.5);
     scene.add(ambientLight);
 
-    const pointLight = new THREE.PointLight(0x00ff00, 1, 100);
+    const pointLight = new THREE.PointLight(0x004400, 0.3, 100);
     pointLight.position.set(10, 10, 10);
     scene.add(pointLight);
 
     // Handle window resize
     window.addEventListener('resize', onWindowResize, false);
+
+    // Track user interaction to pause auto-orbit
+    setupInteractionDetection();
 
     // Setup search
     setupSearch();
@@ -82,12 +142,14 @@ async function loadCortex() {
         cortexData = await response.json();
         console.log('Cortex loaded:', cortexData.stats);
 
-        // Update UI
-        document.getElementById('node-count').textContent =
-            `Nodes: ${cortexData.stats.total_nodes} | Edges: ${cortexData.stats.total_edges}`;
+        // Update context count
+        document.getElementById('context-count').textContent = cortexData.stats.total_nodes;
 
         // Build visualization
         buildCortex(cortexData);
+
+        // Build category legend
+        buildLegend(cortexData.stats.categories);
 
         // Hide loading screen
         document.getElementById('loading').style.display = 'none';
@@ -106,8 +168,8 @@ function buildCortex(data) {
     nodes = data.nodes;
     edges = data.edges;
 
-    // Create node meshes
-    const nodeGeometry = new THREE.SphereGeometry(0.05, 16, 16);
+    // Create node meshes - tiny points, bloom creates massive glowing orbs
+    const nodeGeometry = new THREE.SphereGeometry(0.02, 8, 8);
 
     nodes.forEach((node, index) => {
         const color = categoryColors[node.category] || categoryColors['default'];
@@ -115,9 +177,10 @@ function buildCortex(data) {
         const nodeMaterial = new THREE.MeshStandardMaterial({
             color: color,
             emissive: color,
-            emissiveIntensity: 0.3,
-            metalness: 0.5,
-            roughness: 0.5
+            emissiveIntensity: 0.3,  // Very low intensity - dark background, only highlighted nodes bloom
+            metalness: 0.2,
+            roughness: 0.7,
+            transparent: false
         });
 
         const mesh = new THREE.Mesh(nodeGeometry, nodeMaterial);
@@ -140,13 +203,7 @@ function buildCortex(data) {
         nodeObjects.push(mesh);
     });
 
-    // Create edge lines
-    const edgeMaterial = new THREE.LineBasicMaterial({
-        color: 0x444444,
-        opacity: 0.3,
-        transparent: true
-    });
-
+    // Create edge lines - each with individual material for highlighting
     edges.forEach(edge => {
         const sourcePos = nodes[edge.source].position;
         const targetPos = nodes[edge.target].position;
@@ -158,7 +215,23 @@ function buildCortex(data) {
         ]);
 
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+        // Individual material per edge for independent color control - subtle glow
+        const edgeMaterial = new THREE.LineBasicMaterial({
+            color: 0x333333,
+            opacity: 0.15,  // More transparent for ethereal effect
+            transparent: true,
+            linewidth: 1
+        });
+
         const line = new THREE.Line(geometry, edgeMaterial);
+
+        // Store edge metadata
+        line.userData = {
+            source: edge.source,
+            target: edge.target,
+            edgeIndex: edgeObjects.length
+        };
 
         scene.add(line);
         edgeObjects.push(line);
@@ -167,26 +240,157 @@ function buildCortex(data) {
     console.log(`Built cortex: ${nodeObjects.length} nodes, ${edgeObjects.length} edges`);
 }
 
+// Build category legend
+function buildLegend(categories) {
+    const legendContainer = document.getElementById('legend-items');
+    legendContainer.innerHTML = '';
+
+    // Sort categories alphabetically, but put 'default' last
+    const sortedCategories = categories.sort((a, b) => {
+        if (a === 'default') return 1;
+        if (b === 'default') return -1;
+        return a.localeCompare(b);
+    });
+
+    sortedCategories.forEach(category => {
+        const color = categoryColors[category] || categoryColors['default'];
+        const hexColor = '#' + color.toString(16).padStart(6, '0');
+
+        const item = document.createElement('div');
+        item.className = 'legend-item';
+
+        const colorBox = document.createElement('div');
+        colorBox.className = 'legend-color';
+        colorBox.style.backgroundColor = hexColor;
+        colorBox.style.color = hexColor;
+
+        const label = document.createElement('span');
+        label.textContent = category.toUpperCase();
+
+        item.appendChild(colorBox);
+        item.appendChild(label);
+        legendContainer.appendChild(item);
+    });
+
+    console.log(`Legend built: ${sortedCategories.length} categories`);
+}
+
 // Animation loop
 function animate() {
     requestAnimationFrame(animate);
 
+    // Animate trace propagation
+    const time = clock.getElapsedTime();
+    const deltaTime = 1 / 60;  // Assume 60fps for consistent orbital speed
+
+    // Animate camera zoom if active
+    if (cameraAnimating && cameraStartPos) {
+        const animDuration = 1.5;  // 1.5 seconds
+        const elapsed = time - cameraAnimationStart;
+        const t = Math.min(elapsed / animDuration, 1.0);
+
+        // Smooth easing (ease-in-out)
+        const smoothT = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+        // Interpolate camera position
+        camera.position.lerpVectors(cameraStartPos, cameraTargetPos, smoothT);
+
+        // Interpolate orbit target
+        const currentTarget = new THREE.Vector3();
+        currentTarget.lerpVectors(cameraStartTarget, cameraEndTarget, smoothT);
+
+        // Safely update controls target
+        if (controls.target && typeof controls.target.copy === 'function') {
+            controls.target.copy(currentTarget);
+        }
+
+        if (t >= 1.0) {
+            cameraAnimating = false;
+            // Hold the zoomed position for 8 seconds before resuming orbital camera
+            cameraHoldUntil = time + 8.0;
+            zoomOutStartTime = time + 8.0;  // Start zooming out after hold period
+
+            // Enable local orbit mode around query results
+            isLocalOrbit = true;
+            localOrbitCenter.copy(cameraEndTarget);
+
+            // Calculate current distance from camera to target
+            const currentDistance = camera.position.distanceTo(cameraEndTarget);
+            localOrbitDistance = Math.max(currentDistance, 3);  // Minimum distance of 3
+
+            // Sync camera target to prevent jump when transitioning to orbit
+            cameraTarget.copy(localOrbitCenter);
+
+            // Calculate orbit angle from current camera position to ensure smooth continuation
+            const offset = new THREE.Vector3().subVectors(camera.position, cameraTarget);
+            orbitAngle = Math.atan2(offset.z, offset.x);
+        }
+    }
+
+    // Check if user interaction has timed out
+    if (userInteracting && time - lastInteractionTime > interactionTimeout) {
+        userInteracting = false;
+    }
+
+    // Update camera with dynamic orbital movement (only when not animating and not under user control)
+    if (!cameraAnimating && !userInteracting) {
+        updateCameraDynamics(time, deltaTime);
+    }
+
     // Update controls
     controls.update();
 
-    // Pulse highlighted nodes
-    const time = clock.getElapsedTime();
-    highlightedNodes.forEach(index => {
-        const node = nodeObjects[index];
-        if (node) {
-            const pulse = Math.sin(time * 3) * 0.5 + 1.0;
-            node.material.emissiveIntensity = pulse;
-            node.scale.set(1 + pulse * 0.3, 1 + pulse * 0.3, 1 + pulse * 0.3);
+    // Animate nodes - sequential trace propagation like OpenTelemetry spans
+    const timeSinceTraceStart = time - traceStartTime;
+
+    traceSequence.forEach(({nodeIndex, delay}) => {
+        const node = nodeObjects[nodeIndex];
+        if (node && timeSinceTraceStart >= delay) {
+            // Calculate time this specific node has been active
+            const nodeActiveTime = timeSinceTraceStart - delay;
+
+            // Pulse effect for this node (starts when its delay is reached)
+            const nodePulse = Math.sin(nodeActiveTime * 3) * 0.5 + 1.0;
+
+            // Fade in effect (0 to 1 over 0.3 seconds)
+            const fadeIn = Math.min(nodeActiveTime / 0.3, 1.0);
+
+            node.material.emissive.setHex(0x00ffff);
+            node.material.emissiveIntensity = fadeIn * nodePulse * 45.0;  // Massive burst - pure glowing orb like reference image
+            node.scale.set(1 + nodePulse * 0.5, 1 + nodePulse * 0.5, 1 + nodePulse * 0.5);
+        } else if (node) {
+            // Not yet active - keep at idle state
+            const color = categoryColors[node.userData.category] || categoryColors['default'];
+            node.material.emissive.setHex(color);
+            node.material.emissiveIntensity = 0.3;
+            node.scale.set(1, 1, 1);
         }
     });
 
-    // Render
-    renderer.render(scene, camera);
+    // Animate edges - propagating trace flow
+    highlightedEdges.forEach(index => {
+        const edge = edgeObjects[index];
+        if (edge) {
+            // Stagger edge activation based on index (like trace spans flowing through system)
+            const edgeDelay = index * 0.05;  // Each edge starts slightly later
+            const edgeActiveTime = Math.max(0, timeSinceTraceStart - edgeDelay);
+
+            // Traveling wave effect along edge
+            const flowPulse = Math.sin(time * 4 + index * 0.3) * 0.3 + 0.7;
+
+            // Fade in over 0.2 seconds
+            const fadeIn = Math.min(edgeActiveTime / 0.2, 1.0);
+
+            edge.material.opacity = fadeIn * flowPulse;
+
+            // Brighten color during pulse
+            const brightness = Math.floor(255 * flowPulse);
+            edge.material.color.setRGB(0, brightness / 255 * fadeIn, brightness / 255 * fadeIn);
+        }
+    });
+
+    // Render with bloom post-processing
+    composer.render();
 
     // Update FPS
     frameCount++;
@@ -202,6 +406,25 @@ function onWindowResize() {
     camera.aspect = container.clientWidth / container.clientHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(container.clientWidth, container.clientHeight);
+    composer.setSize(container.clientWidth, container.clientHeight);
+}
+
+// Setup interaction detection to pause auto-orbit during manual control
+function setupInteractionDetection() {
+    const canvas = renderer.domElement;
+
+    function onUserInteraction() {
+        userInteracting = true;
+        lastInteractionTime = clock.getElapsedTime();
+    }
+
+    // Mouse events
+    canvas.addEventListener('mousedown', onUserInteraction, false);
+    canvas.addEventListener('wheel', onUserInteraction, false);
+
+    // Touch events
+    canvas.addEventListener('touchstart', onUserInteraction, false);
+    canvas.addEventListener('touchmove', onUserInteraction, false);
 }
 
 // Setup search functionality
@@ -234,8 +457,8 @@ async function searchCortex(query) {
         // Highlight matching nodes
         highlightSearchResults(data.results);
 
-        // Show info panel
-        displaySearchResults(data.results, query);
+        // Show top match in header
+        displaySearchResults(data.results);
 
     } catch (error) {
         console.error('Search failed:', error);
@@ -243,28 +466,145 @@ async function searchCortex(query) {
     }
 }
 
-// Highlight nodes in search results
+// Highlight nodes in search results - with trace-style sequential propagation
 function highlightSearchResults(results) {
     // Clear previous highlights
     clearHighlights();
 
-    // Highlight new results
-    results.forEach(result => {
+    // Build trace sequence - ordered by similarity (mimics trace execution order)
+    traceSequence = [];
+    const matchedIndices = [];
+
+    results.forEach((result, i) => {
         // Find node by id
         const nodeIndex = nodes.findIndex(n => n.id === result.id);
         if (nodeIndex !== -1) {
             highlightedNodes.add(nodeIndex);
+            matchedIndices.push(nodeIndex);
 
-            // Update node appearance
-            const node = nodeObjects[nodeIndex];
-            node.material.emissive.setHex(0x00ffff);
-            node.material.emissiveIntensity = 1.5;
+            // Store in sequence with timing offset
+            traceSequence.push({
+                nodeIndex: nodeIndex,
+                delay: i * 0.15  // Stagger each result by 150ms (like spans executing)
+            });
+        }
+    });
+
+    // Start trace animation
+    traceStartTime = clock.getElapsedTime();
+
+    // Highlight edges between matched nodes
+    highlightConnectingEdges(matchedIndices);
+
+    // Zoom camera to highlighted region
+    focusCameraOnResults(matchedIndices);
+}
+
+// Zoom camera to show search results
+function focusCameraOnResults(matchedIndices) {
+    if (matchedIndices.length === 0) return;
+
+    // Initialize camera animation vectors on first use
+    if (!cameraStartPos) {
+        cameraStartPos = new THREE.Vector3();
+        cameraTargetPos = new THREE.Vector3();
+        cameraStartTarget = new THREE.Vector3();
+        cameraEndTarget = new THREE.Vector3();
+    }
+
+    // Calculate bounding box of matched nodes
+    const bounds = {
+        minX: Infinity, maxX: -Infinity,
+        minY: Infinity, maxY: -Infinity,
+        minZ: Infinity, maxZ: -Infinity
+    };
+
+    matchedIndices.forEach(index => {
+        const pos = nodes[index].position;
+        bounds.minX = Math.min(bounds.minX, pos[0]);
+        bounds.maxX = Math.max(bounds.maxX, pos[0]);
+        bounds.minY = Math.min(bounds.minY, pos[1]);
+        bounds.maxY = Math.max(bounds.maxY, pos[1]);
+        bounds.minZ = Math.min(bounds.minZ, pos[2]);
+        bounds.maxZ = Math.max(bounds.maxZ, pos[2]);
+    });
+
+    // Center of results
+    const center = new THREE.Vector3(
+        (bounds.minX + bounds.maxX) / 2,
+        (bounds.minY + bounds.maxY) / 2,
+        (bounds.minZ + bounds.maxZ) / 2
+    );
+
+    // Size of cluster
+    const size = Math.max(
+        bounds.maxX - bounds.minX,
+        bounds.maxY - bounds.minY,
+        bounds.maxZ - bounds.minZ,
+        2  // Minimum size to avoid zooming too close
+    );
+
+    // Calculate camera distance to fit all nodes
+    const distance = Math.max(size * 2.5, 3);  // Minimum distance of 3
+
+    // Camera offset from center - position for smooth orbit transition
+    // Use current orbit angle to maintain continuity
+    const currentAngle = orbitAngle;
+    const offset = new THREE.Vector3(
+        distance * Math.cos(currentAngle) * Math.cos(orbitElevation),
+        distance * Math.sin(orbitElevation),
+        distance * Math.sin(currentAngle) * Math.cos(orbitElevation)
+    );
+
+    // Save current state
+    cameraStartPos.copy(camera.position);
+
+    // Safely get current orbit target
+    if (controls.target && typeof controls.target.x === 'number') {
+        cameraStartTarget.copy(controls.target);
+    } else {
+        cameraStartTarget.set(0, 0, 0);
+    }
+
+    // Set target state
+    cameraTargetPos.copy(center).add(offset);
+    cameraEndTarget.copy(center);
+
+    // Start animation
+    cameraAnimating = true;
+    cameraAnimationStart = clock.getElapsedTime();
+}
+
+// Highlight edges connecting matched nodes
+function highlightConnectingEdges(matchedIndices) {
+    const matchedSet = new Set(matchedIndices);
+
+    edges.forEach((edge, edgeIndex) => {
+        const sourceMatched = matchedSet.has(edge.source);
+        const targetMatched = matchedSet.has(edge.target);
+
+        // Highlight edges where both nodes are matched
+        if (sourceMatched && targetMatched) {
+            highlightedEdges.add(edgeIndex);
+            const edgeLine = edgeObjects[edgeIndex];
+            edgeLine.material.color.setHex(0x00ffff);  // Bright cyan
+            edgeLine.material.opacity = 1.0;
+            edgeLine.material.linewidth = 3;
+        }
+        // Also highlight edges where at least one node is matched (dimmer)
+        else if (sourceMatched || targetMatched) {
+            highlightedEdges.add(edgeIndex);
+            const edgeLine = edgeObjects[edgeIndex];
+            edgeLine.material.color.setHex(0x00aaaa);  // Medium cyan
+            edgeLine.material.opacity = 0.7;
+            edgeLine.material.linewidth = 2;
         }
     });
 }
 
 // Clear all highlights
 function clearHighlights() {
+    // Clear node highlights
     highlightedNodes.forEach(index => {
         const node = nodeObjects[index];
         if (node) {
@@ -275,43 +615,41 @@ function clearHighlights() {
         }
     });
     highlightedNodes.clear();
+
+    // Clear edge highlights
+    highlightedEdges.forEach(index => {
+        const edge = edgeObjects[index];
+        if (edge) {
+            edge.material.color.setHex(0x333333);
+            edge.material.opacity = 0.15;
+            edge.material.linewidth = 1;
+        }
+    });
+    highlightedEdges.clear();
+
+    // Clear trace sequence
+    traceSequence = [];
+    traceStartTime = 0;
 }
 
-// Display search results in info panel
-function displaySearchResults(results, query) {
-    const infoPanel = document.getElementById('info-panel');
-    const infoContent = document.getElementById('info-content');
+// Display search results below search box
+function displaySearchResults(results) {
+    const searchResults = document.getElementById('search-results');
 
     if (results.length === 0) {
-        infoContent.innerHTML = `
-            <h4>Query: "${query}"</h4>
-            <p>No results found.</p>
-        `;
+        searchResults.innerHTML = `<span style="color: #666;">> No matches found</span>`;
     } else {
-        let html = `<h4>Query: "${query}"</h4>`;
-        html += `<p><strong>${results.length} matches</strong></p>`;
-        html += '<hr style="border-color: #0f0; margin: 10px 0;">';
+        // Get the top match
+        const topMatch = results[0];
 
-        results.slice(0, 5).forEach((result, i) => {
-            const similarity = (result.similarity * 100).toFixed(1);
-            const preview = result.content.substring(0, 100) + '...';
-            html += `
-                <div style="margin-bottom: 10px;">
-                    <strong>#${i + 1}</strong> (${similarity}% match)<br>
-                    <small>${preview}</small>
-                </div>
-            `;
-        });
+        // Find the node to get its category
+        const node = nodes.find(n => n.id === topMatch.id);
+        const category = node ? node.category : 'Unknown';
 
-        infoContent.innerHTML = html;
+        // Format: "> Top Match: [content preview] [category]"
+        const preview = topMatch.content.substring(0, 60);
+        searchResults.innerHTML = `<span id="top-match">> Top Match: ${preview} <span class="category-tag">[${category}]</span></span>`;
     }
-
-    infoPanel.classList.add('visible');
-
-    // Auto-hide after 10 seconds
-    setTimeout(() => {
-        infoPanel.classList.remove('visible');
-    }, 10000);
 }
 
 // Show error message
@@ -331,6 +669,134 @@ function showError(message) {
     }, 5000);
 }
 
+// Simple Simplex-like noise for organic camera movement
+function simplex2D(x, y) {
+    // Simple pseudo-Perlin noise using sine waves
+    const freq1 = Math.sin(x * 1.5 + y * 1.2) * Math.cos(y * 1.8 - x * 0.7);
+    const freq2 = Math.sin(x * 2.3 - y * 1.9) * Math.cos(x * 1.4 + y * 2.1);
+    const freq3 = Math.sin(x * 3.1 + y * 0.8) * Math.cos(y * 2.7 - x * 1.3);
+    return (freq1 + freq2 * 0.5 + freq3 * 0.25) / 1.75;
+}
+
+// Calculate the centroid of the node cluster
+function calculateClusterCentroid() {
+    if (nodes.length === 0) return new THREE.Vector3(0, 0, 0);
+
+    const centroid = new THREE.Vector3(0, 0, 0);
+    let count = 0;
+
+    for (const node of nodes) {
+        centroid.add(new THREE.Vector3(node.position[0], node.position[1], node.position[2]));
+        count++;
+    }
+
+    centroid.divideScalar(count);
+    return centroid;
+}
+
+// Calculate cluster radius (for dynamic FOV)
+function calculateClusterRadius() {
+    if (nodes.length === 0) return 5;
+
+    const centroid = calculateClusterCentroid();
+    let maxDist = 0;
+
+    for (const node of nodes) {
+        const dist = Math.sqrt(
+            Math.pow(node.position[0] - centroid.x, 2) +
+            Math.pow(node.position[1] - centroid.y, 2) +
+            Math.pow(node.position[2] - centroid.z, 2)
+        );
+        if (dist > maxDist) maxDist = dist;
+    }
+
+    return Math.max(maxDist, 2);
+}
+
+// Update camera with dynamic orbital movement (mimicking reference GIF)
+function updateCameraDynamics(time, deltaTime) {
+    // Update global orbit distance to keep cluster on screen
+    const radius = calculateClusterRadius();
+    const targetGlobalDistance = Math.max(radius * 2.5, 8);  // At least 2.5x cluster radius, minimum 8 units
+    orbitDistance += (targetGlobalDistance - orbitDistance) * 0.02;  // Smooth transition
+
+    // Determine orbit parameters based on mode
+    let targetCenter, targetDistance;
+    let transitionFactor = 0;  // 0 = local orbit, 1 = global orbit
+
+    if (isLocalOrbit && time >= zoomOutStartTime) {
+        // Zooming out - transition from local to global orbit
+        const elapsed = time - zoomOutStartTime;
+        transitionFactor = Math.min(elapsed / zoomOutDuration, 1.0);
+
+        // Smooth easing (ease-in-out)
+        const smoothT = transitionFactor < 0.5
+            ? 2 * transitionFactor * transitionFactor
+            : 1 - Math.pow(-2 * transitionFactor + 2, 2) / 2;
+
+        // Interpolate between local and global
+        const globalCenter = calculateClusterCentroid();
+        targetCenter = new THREE.Vector3().lerpVectors(localOrbitCenter, globalCenter, smoothT);
+        targetDistance = localOrbitDistance + (orbitDistance - localOrbitDistance) * smoothT;
+
+        // End local orbit mode when transition completes
+        if (transitionFactor >= 1.0) {
+            isLocalOrbit = false;
+        }
+    } else if (isLocalOrbit) {
+        // Local orbit mode - orbit around query results
+        targetCenter = localOrbitCenter;
+        targetDistance = localOrbitDistance;
+    } else {
+        // Global orbit mode - orbit around full cluster
+        targetCenter = calculateClusterCentroid();
+        targetDistance = orbitDistance;
+    }
+
+    // Smoothly interpolate camera target
+    cameraTarget.x += (targetCenter.x - cameraTarget.x) * lookSensitivity;
+    cameraTarget.y += (targetCenter.y - cameraTarget.y) * lookSensitivity;
+    cameraTarget.z += (targetCenter.z - cameraTarget.z) * lookSensitivity;
+
+    // Orbital movement (slow counterclockwise orbit)
+    orbitAngle += orbitSpeed * deltaTime;
+
+    // Calculate base orbital position using spherical coordinates
+    const baseX = cameraTarget.x + targetDistance * Math.cos(orbitAngle) * Math.cos(orbitElevation);
+    const baseY = cameraTarget.y + targetDistance * Math.sin(orbitElevation);
+    const baseZ = cameraTarget.z + targetDistance * Math.sin(orbitAngle) * Math.cos(orbitElevation);
+
+    // Add organic "float" using Simplex noise (shimmer effect) - reduce during local orbit and transitions
+    let shimmerScale = 1;
+    if (isLocalOrbit) {
+        if (time >= zoomOutStartTime) {
+            // Fading out during zoom-out transition
+            shimmerScale = 1 - transitionFactor;
+        } else {
+            // Reduced shimmer during local orbit for smoother viewing
+            shimmerScale = 0.3;
+        }
+    }
+    const shimmerX = simplex2D(time * 0.5, 0) * noiseScale * shimmerScale;
+    const shimmerY = simplex2D(0, time * 0.3) * noiseScale * shimmerScale;
+    const shimmerZ = simplex2D(time * 0.4, time * 0.2) * noiseScale * shimmerScale;
+
+    // Apply orbital position with shimmer
+    camera.position.x = baseX + shimmerX;
+    camera.position.y = baseY + shimmerY;
+    camera.position.z = baseZ + shimmerZ;
+
+    // Dynamic FOV based on cluster size (keeps visual density consistent)
+    const newRadius = calculateClusterRadius();
+    clusterRadius += (newRadius - clusterRadius) * 0.05;
+    const targetFOV = baseFOV * (1 + clusterRadius / 10);
+    camera.fov += (targetFOV - camera.fov) * 0.05;
+    camera.updateProjectionMatrix();
+
+    // Point camera at the smoothed centroid
+    camera.lookAt(cameraTarget);
+}
+
 // OrbitControls implementation (inlined for simplicity)
 THREE.OrbitControls = function(camera, domElement) {
     this.enabled = true;
@@ -341,6 +807,8 @@ THREE.OrbitControls = function(camera, domElement) {
     this.enableZoom = true;
     this.enableRotate = true;
     this.enablePan = true;
+    this.autoRotate = false;
+    this.autoRotateSpeed = 2.0;
 
     const scope = this;
     const spherical = new THREE.Spherical();
@@ -423,6 +891,12 @@ THREE.OrbitControls = function(camera, domElement) {
         offset.copy(camera.position).sub(target);
 
         spherical.setFromVector3(offset);
+
+        // Auto-rotation
+        if (scope.autoRotate && state === STATE.NONE) {
+            sphericalDelta.theta -= 2 * Math.PI / 60 / 60 * scope.autoRotateSpeed;
+        }
+
         spherical.theta += sphericalDelta.theta;
         spherical.phi += sphericalDelta.phi;
         spherical.phi = Math.max(0.01, Math.min(Math.PI - 0.01, spherical.phi));

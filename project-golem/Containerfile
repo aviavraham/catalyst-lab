@@ -30,8 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /root/.local /root/.local
 
 # Copy application code
-COPY ingest.py GolemServer.py ./
+COPY ingest.py GolemServer.py wikipedia_ingest.py bulk_upload.py direct_ingest.py direct_ingest_expanded.py ./
 COPY app/ ./app/
+COPY config.yaml golem_cortex.json ./
 
 # Ensure Python packages are in PATH
 ENV PATH=/root/.local/bin:$PATH
